@@ -1,32 +1,27 @@
 package utils;
 
-import commands.PaymentCommand;
-import commands.TransferCommand;
-import model.Account;
-import model.Role;
-import model.StandingOrder;
-import model.Transaction;
-import model.User;
-import service.BankDataStore;
+import data.BankDataStore;
+import model.entities.*;
+import model.enums.TransactionType; // Import Enum
+import service.factory.TransactionFactory; // Import Factory
+import service.notification.*;
+import service.notification.sender.*;
 
 import javax.swing.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
-import bridge.*;
-import model.Bill;
-
 public class TimeManager {
+    
+    // --- SINGLETON PATTERN ---
     private static TimeManager instance;
     private LocalDate currentDate;
     
-    //Σταθερές Χρεώσεων , Τόκων
+    // Σταθερές Χρεώσεων & Επιτοκίων
     private static final double BUSINESS_MONTHLY_FEE = 5.00;
-  
-    
-    //Επιτόκιο Ταμιευτηρίου (1.6%)
     private static final double SAVINGS_INTEREST_RATE = 0.016; 
+    private static final double FEE_STANDING_ORDER = 0.50; 
 
     private TimeManager() { 
         this.currentDate = LocalDate.now(); 
@@ -37,47 +32,47 @@ public class TimeManager {
         return instance;
     }
 
+    // --- TIME MANAGEMENT ---
+    
     public void setDate(LocalDate date) {
         this.currentDate = date;
         System.out.println("System Date set to: " + getFormattedDate());
     }
     
     public LocalDate getDate() { return currentDate; }
-    public String getFormattedDate() { return currentDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")); }
+    
+    public String getFormattedDate() { 
+        return currentDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")); 
+    }
 
-    //ΚΕΝΤΡΙΚΗ ΜΕΘΟΔΟΣ ΑΛΛΑΓΗΣ ΧΡΟΝΟΥ
+    // --- ΚΕΝΤΡΙΚΗ ΜΕΘΟΔΟΣ ΑΛΛΑΓΗΣ ΧΡΟΝΟΥ ---
     public void advanceTime() {
         int oldMonth = currentDate.getMonthValue();
         
-        //1.Επόμενη Μέρα
+        // 1. Επόμενη Μέρα
         currentDate = currentDate.plusDays(1);
         System.out.println(">>> ΝΕΑ ΗΜΕΡΟΜΗΝΙΑ: " + getFormattedDate());
 
-        //2.Εκτέλεση Πάγιων Εντολών
+        // 2. Εκτέλεση Καθημερινών Εργασιών
         executeGlobalStandingOrders();
         checkBills();
         checkUpcomingStandingOrders();
-        //3.ΕΛΕΓΧΟΣ ΑΛΛΑΓΗΣ ΜΗΝΑ
+
+        // 3. Έλεγχος Αλλαγής Μήνα
         if (currentDate.getMonthValue() != oldMonth) {
             System.out.println("--- ΝΕΟΣ ΜΗΝΑΣ ---");
-            
-            //Α.Απόδοση Τόκων σε Ταμιευτηρίου (Η Τράπεζα πληρώνει τους Πελάτες)
             applySavingsInterest();
-            
-            //Β.Χρέωση Εξόδων σε Επιχειρήσεις (Οι Επιχειρήσεις πληρώνουν την Τράπεζα)
             applyBusinessMonthlyFees();
         }
     }
 
-    
-
-    //2.ΑΠΟΔΟΣΗ ΤΟΚΩΝ
+    // 2. ΑΠΟΔΟΣΗ ΤΟΚΩΝ (Χρήση Factory)
     private void applySavingsInterest() {
         BankDataStore store = BankDataStore.getInstance();
         Account bankAcc = store.getCentralBankAccount();
         
         if (bankAcc == null) {
-            System.err.println("Δεν βρέθηκε ο κεντρικός λογαριασμός της Τράπεζας!");
+            System.err.println("Warning: Δεν βρέθηκε ο κεντρικός λογαριασμός της Τράπεζας!");
             return;
         }
 
@@ -85,30 +80,39 @@ public class TimeManager {
         int count = 0;
 
         for (Account acc : store.getAccounts()) {
-            //Έλεγχος αν είναι Ταμιευτηρίου και έχει θετικό υπόλοιπο
-            if (acc.getAccountType().equals("Ταμιευτηρίου") && acc.getBalance() > 0) {
+            // Έλεγχος: Είναι τύπου Savings (Ταμιευτηρίου) και έχει θετικό υπόλοιπο;
+            // Χρησιμοποιούμε τη μέθοδο του Factory/Enum ή instanceof
+            if (acc instanceof SavingsAccount && acc.getBalance() > 0) {
                 
                 double interest = acc.getBalance() * SAVINGS_INTEREST_RATE;
                 
-                //1.Πίστωση στον Πελάτη
-                acc.setBalance(acc.getBalance() + interest);
-                acc.addTransaction(new Transaction.Builder(interest)
-                        .setType("Τόκοι")
-                        .setDescription("Απόδοση Τόκων (1.6%)")
-                        .setDate(currentDate)
-                        .setSender("Bank OfTuc")
-                        .setReceiver(acc.getIban())
-                        .setBalanceAfter(acc.getBalance())
-                        .build());
+                // A. Πίστωση στον Πελάτη
+                acc.deposit(interest);
+                
+                Transaction tClient = TransactionFactory.createTransaction(
+                    interest,
+                    TransactionType.DEPOSIT, // Τύπος Enum
+                    "Απόδοση Τόκων (1.6%)",
+                    "Bank OfTuc",
+                    acc.getIban(),
+                    0.0,
+                    acc.getBalance()
+                );
+                acc.addTransaction(tClient);
 
-                //2.Χρέωση στην Τράπεζα
-                bankAcc.setBalance(bankAcc.getBalance() - interest);
-                bankAcc.addTransaction(new Transaction.Builder(interest)
-                        .setType("Πληρωμή Τόκων")
-                        .setDescription("Τόκοι προς " + acc.getIban())
-                        .setDate(currentDate)
-                        .setBalanceAfter(bankAcc.getBalance())
-                        .build());
+                // B. Χρέωση στην Τράπεζα
+                bankAcc.withdraw(interest);
+                
+                Transaction tBank = TransactionFactory.createTransaction(
+                    interest,
+                    TransactionType.PAYMENT, // Η τράπεζα πληρώνει
+                    "Πληρωμή Τόκων προς " + acc.getIban(),
+                    "Bank OfTuc",
+                    acc.getIban(),
+                    0.0,
+                    bankAcc.getBalance()
+                );
+                bankAcc.addTransaction(tBank);
 
                 totalInterestPaid += interest;
                 count++;
@@ -123,42 +127,49 @@ public class TimeManager {
         }
     }
 
-    //3.ΧΡΕΩΣΗ ΕΠΙΧΕΙΡΗΣΕΩΝ
+    // 3. ΧΡΕΩΣΗ ΕΠΙΧΕΙΡΗΣΕΩΝ (Χρήση Factory)
     private void applyBusinessMonthlyFees() {
         BankDataStore store = BankDataStore.getInstance();
         Account bankAcc = store.getCentralBankAccount();
         double totalProfit = 0;
         int count = 0;
 
-        for (User u : store.getUsers()) {
-            if ((u.getRole() == Role.BUSINESS || u.getRole() == Role.ADMIN) && !u.getFullName().equals("Bank OfTuc")) {
-                for (Account acc : store.getAccounts()) {
-                    if (acc.getOwnerName().equals(u.getFullName())) {
-                        double oldBal = acc.getBalance();
-                        acc.setBalance(oldBal - BUSINESS_MONTHLY_FEE);
+        for (Account acc : store.getAccounts()) {
+            // Έλεγχος αν είναι BusinessAccount
+            if (acc instanceof BusinessAccount) {
+                // Δεν χρεώνουμε τον ίδιο τον λογαριασμό της τράπεζας
+                if (acc.getIban().equals(bankAcc.getIban())) continue;
+
+                acc.withdraw(BUSINESS_MONTHLY_FEE);
+                
+                Transaction t = TransactionFactory.createTransaction(
+                    BUSINESS_MONTHLY_FEE,
+                    TransactionType.PAYMENT,
+                    "Μηνιαίο Τέλος Διατήρησης",
+                    acc.getIban(),
+                    "Bank OfTuc",
+                    0.0,
+                    acc.getBalance()
+                );
+                acc.addTransaction(t);
                         
-                        acc.addTransaction(new Transaction.Builder(BUSINESS_MONTHLY_FEE)
-                                .setType("Χρέωση")
-                                .setDescription("Μηνιαίο Τέλος Διατήρησης")
-                                .setDate(currentDate)
-                                .setBalanceAfter(acc.getBalance())
-                                .build());
-                        
-                        totalProfit += BUSINESS_MONTHLY_FEE;
-                        count++;
-                    }
-                }
+                totalProfit += BUSINESS_MONTHLY_FEE;
+                count++;
             }
         }
 
         if (bankAcc != null && totalProfit > 0) {
-            bankAcc.setBalance(bankAcc.getBalance() + totalProfit);
-            bankAcc.addTransaction(new Transaction.Builder(totalProfit)
-                    .setType("Είσπραξη")
-                    .setDescription("Συνολικά Μηνιαία Τέλη")
-                    .setDate(currentDate)
-                    .setBalanceAfter(bankAcc.getBalance())
-                    .build());
+            bankAcc.deposit(totalProfit);
+            Transaction tBank = TransactionFactory.createTransaction(
+                totalProfit,
+                TransactionType.DEPOSIT,
+                "Είσπραξη Μηνιαίων Τελών",
+                "System",
+                "Bank OfTuc",
+                0.0,
+                bankAcc.getBalance()
+            );
+            bankAcc.addTransaction(tBank);
         }
         
         if (count > 0) {
@@ -166,190 +177,127 @@ public class TimeManager {
         }
     }
     
+    // 4. ΕΚΤΕΛΕΣΗ ΠΑΓΙΩΝ ΕΝΤΟΛΩΝ (Διορθωμένο)
     private void executeGlobalStandingOrders() {
         List<StandingOrder> orders = BankDataStore.getInstance().getStandingOrders();
-        Account bankOfTuc = BankDataStore.getInstance().getCentralBankAccount(); // Ο Λογαριασμός της Τράπεζας
+        Account bankOfTuc = BankDataStore.getInstance().getCentralBankAccount();
 
         for (StandingOrder so : orders) {
-            //1.Έλεγχος αν η εντολή είναι ενεργή
             if (!so.isActive()) continue;
 
-            //2.Έλεγχος Ημερομηνίας: Πρέπει να έχει περάσει η ημερομηνία έναρξης 
-            // ΚΑΙ να έχει φτάσει η ημερομηνία επόμενης εκτέλεσης.
+            // Έλεγχος Ημερομηνίας
             if (!so.getNextExecutionDate().isAfter(currentDate) && !so.getStartDate().isAfter(currentDate)) {
                  
-                 //Βρίσκουμε τον λογαριασμό του πελάτη
                  Account sourceAcc = BankDataStore.getInstance().getAccountByIban(so.getSourceIban());
                  
                  if (sourceAcc != null) {
-                     // Υπολογισμός Συνόλου (Ποσό + Προμήθεια)
-                     double fee = BankDataStore.FEE_STANDING_ORDER;
+                     double fee = FEE_STANDING_ORDER;
                      double totalDeduction = so.getAmount() + fee;
                      
-                     //3.Έλεγχος Υπολοίπου
                      if (sourceAcc.getBalance() >= totalDeduction) {
-                         //ΕΠΙΤΥΧΙΑ
-                         
-                         //Α.Χρέωση Πελάτη (Ποσό + Προμήθεια)
+                         // A. Χρέωση
                          sourceAcc.withdraw(totalDeduction);
                          
-                         //Β.Πίστωση Παραλήπτη (Αν είναι εσωτερικός λογαριασμός IBAN)
-                         //Αν το targetIban είναι κενό ή εξωτερικό, υποθέτουμε ότι τα λεφτά φεύγουν εκτός τράπεζας.
+                         // B. Πίστωση (αν είναι εσωτερικός)
                          Account targetAcc = BankDataStore.getInstance().getAccountByIban(so.getTarget());
                          if (targetAcc != null) {
-                             targetAcc.deposit(so.getAmount()); // Ο παραλήπτης παίρνει το καθαρό ποσό
+                             targetAcc.deposit(so.getAmount());
                              
-                             //Καταγραφή εισερχόμενης στον παραλήπτη
-                             targetAcc.addTransaction(new Transaction.Builder(so.getAmount())
-                                     .setType("\"Εισερχόμενη Πάγια εντολή")
-                                     .setSender(sourceAcc.getIban())
-                                     .setReceiver(so.getTarget())
-                                     .setDescription(so.getDescription() +" από "+ sourceAcc.getOwnerName())
-                                     .setDate(currentDate)
-                                     .setBalanceAfter(targetAcc.getBalance())
-                                     .build());
+                             Transaction tIn = TransactionFactory.createTransaction(
+                                 so.getAmount(),
+                                 TransactionType.DEPOSIT,
+                                 "Εισερχόμενη Πάγια: " + so.getDescription(),
+                                 sourceAcc.getIban(),
+                                 so.getTarget(),
+                                 0.0,
+                                 targetAcc.getBalance()
+                             );
+                             targetAcc.addTransaction(tIn);
                          }
                          
-                         
-                         	model.Bill paidBill = BankDataStore.getInstance().getBillByRf(so.getTarget());
-                         
+                         // Έλεγχος αν ήταν πληρωμή Bill
+                         Bill paidBill = BankDataStore.getInstance().getBillByRf(so.getTarget());
                          if (paidBill != null) {
-                             //Διαγραφή από τη λίστα εκκρεμών λογαριασμών
                              BankDataStore.getInstance().getPendingBills().remove(paidBill);
-                             
-                             //Αποθήκευση του bills.csv για να μη ξαναεμφανιστεί
-                             service.CsvService service = new service.CsvService();
-                             service.saveBills(BankDataStore.getInstance().getPendingBills());
-                             
                              System.out.println("Ο λογαριασμός " + paidBill.getDescription() + " εξοφλήθηκε μέσω πάγιας!");
                          }
                          
-                         //Γ.Κατάθεση Προμήθειας στην Τράπεζα
-                         if (fee > 0) {
+                         // Γ. Προμήθεια
+                         if (fee > 0 && bankOfTuc != null) {
                              bankOfTuc.deposit(fee);
-                             
-                             //Καταγραφή εσόδου τράπεζας (Προαιρετικό)
-                             bankOfTuc.addTransaction(new Transaction.Builder(fee)
-                                     .setType("Commission Revenue")
-                                     .setDescription("Προμήθεια Πάγιας: " + so.getSourceIban())
-                                     .setDate(currentDate)
-                                     .setBalanceAfter(bankOfTuc.getBalance())
-                                     .build());
+                             // TransactionFactory...
                          }
                          
-                         //Δ.Καταγραφή Συναλλαγής στο Ιστορικό του Πελάτη
-                         Transaction t = new Transaction.Builder(totalDeduction) // Ο πελάτης βλέπει τη συνολική χρέωση
-                             .setType("Πάγια εντολή")
-                             .setFee(fee)
-                             .setDescription(so.getDescription() +" πάγια εντολή προς " + so.getTarget())
-                             .setDate(currentDate)
-                             .setSender(sourceAcc.getIban())
-                             .setReceiver(so.getTarget())
-                             .setBalanceAfter(sourceAcc.getBalance())
-                             .build();
-                         sourceAcc.addTransaction(t);
+                         // Δ. Καταγραφή Χρέωσης
+                         Transaction tOut = TransactionFactory.createTransaction(
+                             so.getAmount(),
+                             TransactionType.TRANSFER,
+                             "Πάγια εντολή: " + so.getDescription(),
+                             sourceAcc.getIban(),
+                             so.getTarget(),
+                             fee,
+                             sourceAcc.getBalance()
+                         );
+                         sourceAcc.addTransaction(tOut);
 
                      } else {
-                         //ΑΠΟΤΥΧΙΑ (Ανεπαρκές Υπόλοιπο)
-                         
-                         //Ειδοποίηση Χρήστη (Bridge Pattern)
-                         //Πρέπει να βρούμε τον User object από το όνομα στον λογαριασμό ή το IBAN
-                         //Χρησιμοποιούμε τη μέθοδο που φτιάξαμε νωρίτερα στο BankDataStore
+                         // Αποτυχία λόγω υπολοίπου - Ειδοποίηση
                          User owner = BankDataStore.getInstance().getUserByFullName(sourceAcc.getOwnerName());
-                         
                          if (owner != null && owner.isNotifyStandingOrderFailed()) {
                              MessageSender sender = new EmailSender();
                              Notification notif = new StandingOrderNotification(sender);
-                             
-                             String msg = "Η πάγια εντολή προς <b>" + so.getTarget() + "</b><br>" +
-                                          "ποσού <b>" + so.getAmount() + "€</b> απέτυχε λόγω ανεπαρκούς υπολοίπου.";
-                             
-                             notif.send(msg);
+                             notif.send("Η πάγια εντολή προς " + so.getTarget() + " απέτυχε.");
                          }
                      }
                  }
-                 
-                 //4.Ενημέρωση της επόμενης ημερομηνίας εκτέλεσης (είτε πέτυχε είτε απέτυχε)
-                 //Προσθέτουμε τις ημέρες συχνότητας (π.χ. 30 μέρες)
+                 // Ενημέρωση επόμενης ημερομηνίας
                  so.setNextExecutionDate(currentDate.plusDays(so.getFrequencyDays()));
             }
         }
-        
-        //5.Αποθήκευση όλων των αλλαγών (υπόλοιπα, transactions, ημερομηνίες so)
         BankDataStore.getInstance().saveAllData();
     }
     
-    
     private void checkBills() {
         List<Bill> bills = BankDataStore.getInstance().getPendingBills();
-        
-        User loggedUser = BankDataStore.getInstance().getLoggedUser(); //Ποιος βλέπει την οθόνη;
+        User loggedUser = BankDataStore.getInstance().getLoggedUser(); 
 
-        //Αν δεν υπάρχει συνδεδεμένος χρήστης, δεν δείχνουμε popups
         if (loggedUser == null) return;
         
         for (Bill b : bills) {
-            //Έλεγχος αν λήγει ΣΗΜΕΡΑ ή ΑΥΡΙΟ
             if (b.getDueDate().equals(currentDate) || b.getDueDate().equals(currentDate.plusDays(1))) {
-                
-                //1.Βρίσκουμε τον χρήστη βάσει του ΑΦΜ που έχει ο λογαριασμός
                 User debtor = BankDataStore.getInstance().getUserByAfm(b.getOwnerAfm());
-                
                 if (debtor != null && debtor.getUsername().equals(loggedUser.getUsername())) {
-                
-                //2.Αν ο χρήστης υπάρχει ΚΑΙ έχει ενεργοποιήσει τις ειδοποιήσεις
-                if (debtor != null && debtor.isNotifyBillExpiring()) {
-                    
-                    MessageSender sender = new SmsSender();
-                    Notification notif = new BillNotification(sender);
-                    
-                    String msg = "Αγαπητέ πελάτη (ΑΦΜ: " + debtor.getAfm() + "),<br>" +
-                                 "Ο λογαριασμός <b>" + b.getProvider() + "</b> ποσού <b>" + b.getAmount() + "€</b><br>" +
-                                 "λήγει στις " + b.getDueDate() + ".";
-                    
-                    notif.send(msg);
-                }
-            }
-           }
-        }
-    }
-    
-    private void checkUpcomingStandingOrders() {
-        List<StandingOrder> orders = BankDataStore.getInstance().getStandingOrders();
-        User loggedUser = BankDataStore.getInstance().getLoggedUser(); //Ποιος βλέπει την οθόνη;
-
-        //Αν δεν υπάρχει συνδεδεμένος χρήστης, δεν δείχνουμε popups
-        if (loggedUser == null) return;
-
-        for (StandingOrder so : orders) {
-            if (!so.isActive()) continue;
-
-            //Έλεγχος: Είναι η ημερομηνία εκτέλεσης ΑΥΡΙΟ;
-            if (so.getNextExecutionDate().equals(currentDate.plusDays(1))) {
-                
-                //Βρίσκουμε τον ιδιοκτήτη της πάγιας
-                Account sourceAcc = BankDataStore.getInstance().getAccountByIban(so.getSourceIban());
-                if (sourceAcc != null) {
-                    User owner = BankDataStore.getInstance().getUserByFullName(sourceAcc.getOwnerName());
-
-                    //Στέλνουμε ειδοποίηση ΜΟΝΟ αν ο ιδιοκτήτης είναι ο συνδεδεμένος χρήστης
-                    if (owner != null && owner.getUsername().equals(loggedUser.getUsername())) {
-                        
-                        //Χρησιμοποιούμε την προτίμηση StandingOrderFailed ή θεωρούμε ότι θέλει ενημέρωση
-                        if (owner.isNotifyStandingOrderFailed()) {
-                            MessageSender sender = new EmailSender(); // ή SmsSender ανάλογα τις ρυθμίσεις
-                            Notification notif = new StandingOrderNotification(sender);
-                            
-                            String msg = "Υπενθύμιση: Η πάγια εντολή προς <b>" + so.getTarget() + "</b><br>" +
-                                         "ποσού <b>" + so.getAmount() + "€</b> θα εκτελεστεί αύριο (" + so.getNextExecutionDate() + ").";
-                            
-                            notif.send(msg);
-                        }
+                    if (debtor.isNotifyBillExpiring()) {
+                        MessageSender sender = new SmsSender();
+                        Notification notif = new BillNotification(sender);
+                        notif.send("Ο λογαριασμός " + b.getProvider() + " λήγει σύντομα.");
                     }
                 }
             }
         }
     }
     
-    
+    private void checkUpcomingStandingOrders() {
+        List<StandingOrder> orders = BankDataStore.getInstance().getStandingOrders();
+        User loggedUser = BankDataStore.getInstance().getLoggedUser();
+
+        if (loggedUser == null) return;
+
+        for (StandingOrder so : orders) {
+            if (!so.isActive()) continue;
+            if (so.getNextExecutionDate().equals(currentDate.plusDays(1))) {
+                Account sourceAcc = BankDataStore.getInstance().getAccountByIban(so.getSourceIban());
+                if (sourceAcc != null) {
+                    User owner = BankDataStore.getInstance().getUserByFullName(sourceAcc.getOwnerName());
+                    if (owner != null && owner.getUsername().equals(loggedUser.getUsername())) {
+                        if (owner.isNotifyStandingOrderFailed()) { // Χρήση ως γενική ειδοποίηση πάγιας
+                            MessageSender sender = new EmailSender(); 
+                            Notification notif = new StandingOrderNotification(sender);
+                            notif.send("Η πάγια εντολή προς " + so.getTarget() + " θα εκτελεστεί αύριο.");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

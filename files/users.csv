@@ -1,0 +1,7 @@
+admin,1234,Admin User,ADMIN,111111111,admin@bank.gr,6900000000,false,false,0.00,0.00,0.00,true,true,true,true
+gpapadopoulos,1234,Giannis Papadopoulos,INDIVIDUAL,123456789,gpapadopoulos@mail.com,6911111111,false,false,100.00,100.00,0.00,true,true,true,true
+vodafone,1234,VODAFONE AE,BUSINESS,333333333,info@vodafone.gr,2101234567,false,false,0.00,0.00,0.00,true,true,true,true
+bankoftuc,1234,Bank OfTuc,BUSINESS,000000000,info@bank.gr,2100000000,true,false,0.00,0.00,0.00,false,false,false,false
+mpapadopoulou,1234,Maria Papadopoulou,INDIVIDUAL,111222333,mpapadopoulou@mail.com,6922222222,false,false,100.00,100.00,0.00,true,true,true,true
+dei,1234,ΔΕΗ AE,BUSINESS,444444444,info@dei.gr,2101234566,false,false,100.00,100.00,0.00,true,true,true,true
+ngioldasis,3334,Nektarios Gioldasis,INDIVIDUAL,987654321,ngioldasis@mail.com,6922222222,false,false,500.00,1500.00,0.00,true,true,true,true
